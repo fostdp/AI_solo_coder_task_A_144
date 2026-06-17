@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>古代双辕车转向机构仿真与操控稳定性分析系统</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>古代双辕车转向机构仿真与操控稳定性分析系统</h1>
+            <div class="header-info">
+                <span class="status-indicator" id="connectionStatus">未连接</span>
+                <select id="vehicleSelect">
+                    <option value="chariot-qin-001">秦式双辕车 001</option>
+                    <option value="chariot-han-002">汉式双辕车 002</option>
+                    <option value="chariot-zhou-003">周式双辕车 003</option>
+                </select>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="left-panel">
+                <div class="panel-section">
+                    <h3>三维视图</h3>
+                    <div class="view-tabs">
+                        <button class="tab-btn active" data-view="3d">3D 视图</button>
+                        <button class="tab-btn" data-view="top">俯视图</button>
+                        <button class="tab-btn" data-view="side">侧视图</button>
+                    </div>
+                    <div id="canvasContainer" class="canvas-container"></div>
+                    <div class="canvas-controls">
+                        <label>
+                            辕杆转角: <span id="poleAngleValue">0</span>°
+                            <input type="range" id="poleAngleSlider" min="-40" max="40" value="0" step="0.5">
+                        </label>
+                        <label>
+                            车速: <span id="speedValue">5</span> m/s
+                            <input type="range" id="speedSlider" min="1" max="15" value="5" step="0.5">
+                        </label>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h3>转向机构示意图</h3>
+                    <canvas id="linkageCanvas" width="500" height="250"></canvas>
+                </div>
+            </div>
+
+            <div class="right-panel">
+                <div class="panel-section">
+                    <h3>实时传感器数据</h3>
+                    <div class="sensor-grid">
+                        <div class="sensor-card">
+                            <div class="sensor-label">辕杆转角</div>
+                            <div class="sensor-value" id="sensorPoleAngle">0.0°</div>
+                            <div class="sensor-bar">
+                                <div class="sensor-bar-fill" id="barPoleAngle" style="width: 50%"></div>
+                            </div>
+                        </div>
+                        <div class="sensor-card">
+                            <div class="sensor-label">车轮滑移率</div>
+                            <div class="sensor-value" id="sensorSlipRate">0.10</div>
+                            <div class="sensor-bar">
+                                <div class="sensor-bar-fill" id="barSlipRate" style="width: 10%"></div>
+                            </div>
+                        </div>
+                        <div class="sensor-card">
+                            <div class="sensor-label">车身侧倾角</div>
+                            <div class="sensor-value" id="sensorRollAngle">0.0°</div>
+                            <div class="sensor-bar">
+                                <div class="sensor-bar-fill" id="barRollAngle" style="width: 50%"></div>
+                            </div>
+                        </div>
+                        <div class="sensor-card">
+                            <div class="sensor-label">路面摩擦系数</div>
+                            <div class="sensor-value" id="sensorFriction">0.70</div>
+                            <div class="sensor-bar">
+                                <div class="sensor-bar-fill" id="barFriction" style="width: 70%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h3>转向分析</h3>
+                    <div class="analysis-grid">
+                        <div class="analysis-item">
+                            <span class="analysis-label">转向半径</span>
+                            <span class="analysis-value" id="turningRadius">∞ m</span>
+                        </div>
+                        <div class="analysis-item">
+                            <span class="analysis-label">内侧轮转角</span>
+                            <span class="analysis-value" id="innerWheelAngle">0.0°</span>
+                        </div>
+                        <div class="analysis-item">
+                            <span class="analysis-label">外侧轮转角</span>
+                            <span class="analysis-value" id="outerWheelAngle">0.0°</span>
+                        </div>
+                        <div class="analysis-item">
+                            <span class="analysis-label">轮速差</span>
+                            <span class="analysis-value" id="wheelSpeedDiff">0.0%</span>
+                        </div>
+                        <div class="analysis-item">
+                            <span class="analysis-label">阿克曼误差</span>
+                            <span class="analysis-value" id="ackermannError">0.0%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h3>稳定性分析</h3>
+                    <div class="stability-container">
+                        <div class="stability-gauge">
+                            <canvas id="rolloverGauge" width="150" height="80"></canvas>
+                            <div class="gauge-label">侧翻风险</div>
+                        </div>
+                        <div class="stability-info">
+                            <div class="analysis-item">
+                                <span class="analysis-label">横摆角速度</span>
+                                <span class="analysis-value" id="yawRate">0.0°/s</span>
+                            </div>
+                            <div class="analysis-item">
+                                <span class="analysis-label">侧向加速度</span>
+                                <span class="analysis-value" id="lateralAccel">0.00 m/s²</span>
+                            </div>
+                            <div class="analysis-item">
+                                <span class="analysis-label">侧倾中心高度</span>
+                                <span class="analysis-value" id="rollCenterHeight">0.30 m</span>
+                            </div>
+                            <div class="analysis-item">
+                                <span class="analysis-label">稳定性指数</span>
+                                <span class="analysis-value" id="stabilityIndex">1.00</span>
+                            </div>
+                            <div class="analysis-item">
+                                <span class="analysis-label">临界速度</span>
+                                <span class="analysis-value" id="criticalSpeed">— m/s</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h3>告警记录</h3>
+                    <div class="alerts-list" id="alertsList">
+                        <div class="no-alerts">暂无告警</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="app-footer">
+            <span>© 2024 交通史研究团队 · 秦汉双辕车复原研究项目</span>
+        </footer>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
