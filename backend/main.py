@@ -21,7 +21,7 @@ from config.settings import (
     CHARIOT_WHEELBASE, CHARIOT_TRACK_WIDTH, CHARIOT_CG_HEIGHT, CHARIOT_ROLL_CENTER_HEIGHT
 )
 from steering_model import ChariotParams, MultiBodyDynamicsSteering
-from stability_analysis import VehicleDynamicsParams, StabilityAnalyzer
+from stability_analysis import VehicleDynamicsParams, StabilityAnalyzer, CargoConfig
 from alert_manager import AlertManager
 
 
@@ -64,6 +64,10 @@ class StabilityRequest(BaseModel):
     roll_angle: float
     slip_rate: float = 0.1
     friction_coeff: float = 0.7
+    cargo_mass: float = 0.0
+    cargo_offset_lateral: float = 0.0
+    cargo_offset_longitudinal: float = 0.0
+    cargo_offset_height: float = 0.0
 
 
 def init_influxdb():
@@ -177,6 +181,10 @@ def save_analysis_data(vehicle_id: str, steering_result: dict, stability_result:
             .field("outer_wheel_angle", steering_result.get("outer_wheel_angle", 0)) \
             .field("wheel_speed_diff", steering_result.get("wheel_speed_diff", 0)) \
             .field("ackermann_error", steering_result.get("ackermann_error", 0)) \
+            .field("transmission_angle_inner", steering_result.get("transmission_angle_inner", 0)) \
+            .field("transmission_angle_outer", steering_result.get("transmission_angle_outer", 0)) \
+            .field("linkage_interference", int(steering_result.get("linkage_interference", False))) \
+            .field("dead_point_risk", int(steering_result.get("dead_point_risk", False))) \
             .time(ts, WritePrecision.S)
 
         stability_point = Point("stability_analysis") \
@@ -187,6 +195,12 @@ def save_analysis_data(vehicle_id: str, steering_result: dict, stability_result:
             .field("lateral_acceleration", stability_result.get("lateral_acceleration", 0)) \
             .field("stability_index", stability_result.get("stability_index", 0)) \
             .field("critical_speed", stability_result.get("critical_speed", 0)) \
+            .field("effective_cg_height", stability_result.get("effective_cg_height", 0)) \
+            .field("effective_cg_lateral", stability_result.get("effective_cg_lateral", 0)) \
+            .field("effective_cg_longitudinal", stability_result.get("effective_cg_longitudinal", 0)) \
+            .field("effective_yaw_inertia", stability_result.get("effective_yaw_inertia", 0)) \
+            .field("cargo_shift_lateral", stability_result.get("cargo_shift_lateral", 0)) \
+            .field("cargo_shift_vertical", stability_result.get("cargo_shift_vertical", 0)) \
             .time(ts, WritePrecision.S)
 
         write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG,
@@ -245,7 +259,11 @@ async def receive_sensor_data(data: SensorData):
         "turning_radius": steering_result.turning_radius,
         "wheel_speed_diff": steering_result.wheel_speed_diff,
         "ackermann_error": steering_result.ackermann_error,
-        "pole_effective_angle": steering_result.pole_effective_angle
+        "pole_effective_angle": steering_result.pole_effective_angle,
+        "transmission_angle_inner": steering_result.transmission_angle_inner,
+        "transmission_angle_outer": steering_result.transmission_angle_outer,
+        "linkage_interference": steering_result.linkage_interference,
+        "dead_point_risk": steering_result.dead_point_risk
     }
 
     stability_dict = {
@@ -256,7 +274,13 @@ async def receive_sensor_data(data: SensorData):
         "rollover_risk": stability_result.rollover_risk,
         "stability_index": stability_result.stability_index,
         "understeer_gradient": stability_result.understeer_gradient,
-        "critical_speed": stability_result.critical_speed
+        "critical_speed": stability_result.critical_speed,
+        "effective_cg_height": stability_result.effective_cg_height,
+        "effective_cg_lateral": stability_result.effective_cg_lateral,
+        "effective_cg_longitudinal": stability_result.effective_cg_longitudinal,
+        "effective_yaw_inertia": stability_result.effective_yaw_inertia,
+        "cargo_shift_lateral": stability_result.cargo_shift_lateral,
+        "cargo_shift_vertical": stability_result.cargo_shift_vertical
     }
 
     save_analysis_data(data.vehicle_id, steering_dict, stability_dict)
@@ -314,12 +338,28 @@ async def analyze_steering(request: SteeringRequest):
         "ackermann_error": result.ackermann_error,
         "pole_effective_angle": result.pole_effective_angle,
         "inner_wheel_speed_factor": 1 - result.wheel_speed_diff / 2,
-        "outer_wheel_speed_factor": 1 + result.wheel_speed_diff / 2
+        "outer_wheel_speed_factor": 1 + result.wheel_speed_diff / 2,
+        "transmission_angle_inner": result.transmission_angle_inner,
+        "transmission_angle_outer": result.transmission_angle_outer,
+        "linkage_interference": result.linkage_interference,
+        "dead_point_risk": result.dead_point_risk
     }
 
 
 @app.post("/api/analysis/stability")
 async def analyze_stability(request: StabilityRequest):
+    if request.cargo_mass > 0 or request.cargo_offset_lateral != 0 or \
+       request.cargo_offset_longitudinal != 0 or request.cargo_offset_height != 0:
+        cargo_cfg = CargoConfig(
+            mass=request.cargo_mass,
+            offset_lateral=request.cargo_offset_lateral,
+            offset_longitudinal=request.cargo_offset_longitudinal,
+            offset_height=request.cargo_offset_height
+        )
+        stability_analyzer.set_cargo(cargo_cfg)
+    else:
+        stability_analyzer.set_cargo(CargoConfig())
+
     result = stability_analyzer.analyze(
         speed=request.speed,
         pole_angle_deg=request.pole_angle,
@@ -344,7 +384,13 @@ async def analyze_stability(request: StabilityRequest):
         "stability_index": result.stability_index,
         "understeer_gradient": result.understeer_gradient,
         "critical_speed": result.critical_speed,
-        "stability_margin": margin
+        "stability_margin": margin,
+        "effective_cg_height": result.effective_cg_height,
+        "effective_cg_lateral": result.effective_cg_lateral,
+        "effective_cg_longitudinal": result.effective_cg_longitudinal,
+        "effective_yaw_inertia": result.effective_yaw_inertia,
+        "cargo_shift_lateral": result.cargo_shift_lateral,
+        "cargo_shift_vertical": result.cargo_shift_vertical
     }
 
 

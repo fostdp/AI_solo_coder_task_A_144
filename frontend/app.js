@@ -10,17 +10,65 @@ let currentVehicleId = 'chariot-qin-001';
 let scene, camera, renderer, controls;
 let chariotGroup;
 let leftWheel, rightWheel, frontLeftWheel, frontRightWheel;
+let wheelGroups = [];
 let poleGroup;
 let leftTieRod, rightTieRod;
 let leftKingpin, rightKingpin;
-let wheelTrajectoryLine;
+let wheelTrajectoryLine, innerTrajectoryLine;
 let trajectoryPoints = [];
+let innerTrajectoryPoints = [];
 let animationId;
+
+let geometryCache = {};
+let materialCache = {};
+let instancedMeshes = [];
+
+const dummyObj = new THREE.Object3D();
+const tmpQuat = new THREE.Quaternion();
+const tmpScale = new THREE.Vector3(1, 1, 1);
 
 const CHARIOT_WHEELBASE = 2.5;
 const CHARIOT_TRACK_WIDTH = 1.8;
 const WHEEL_RADIUS = 0.35;
+const WHEEL_WIDTH = 0.15;
 const POLE_LENGTH = 1.8;
+const NUM_SPOKES = 8;
+const NUM_RAILING_POSTS = 8;
+
+
+function getSharedGeometry(key, factory) {
+    if (!geometryCache[key]) {
+        geometryCache[key] = factory();
+    }
+    return geometryCache[key];
+}
+
+
+function getSharedMaterial(key, factory) {
+    if (!materialCache[key]) {
+        materialCache[key] = factory();
+    }
+    return materialCache[key];
+}
+
+
+function createInstancedMesh(geometry, material, count, setupCallback) {
+    const instanced = new THREE.InstancedMesh(geometry, material, count);
+    instanced.castShadow = true;
+    instanced.receiveShadow = true;
+    instanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+    if (setupCallback) {
+        for (let i = 0; i < count; i++) {
+            setupCallback(i, dummyObj);
+            dummyObj.updateMatrix();
+            instanced.setMatrixAt(i, dummyObj.matrix);
+        }
+    }
+    instanced.instanceMatrix.needsUpdate = true;
+    instancedMeshes.push(instanced);
+    return instanced;
+}
 
 
 function initThreeJS() {
@@ -36,11 +84,16 @@ function initThreeJS() {
     camera.position.set(4, 3, 5);
     camera.lookAt(0, 0, 0);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        powerPreference: "high-performance"
+    });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(renderer.domElement);
 
     controls = new OrbitControls(camera, renderer.domElement);
@@ -56,7 +109,6 @@ function initThreeJS() {
     createTrajectoryLine();
 
     window.addEventListener('resize', onWindowResize);
-
     animate();
 }
 
@@ -65,7 +117,7 @@ function addLights() {
     const ambientLight = new THREE.AmbientLight(0x404060, 0.6);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.85);
     directionalLight.position.set(5, 10, 5);
     directionalLight.castShadow = true;
     directionalLight.shadow.mapSize.width = 1024;
@@ -105,50 +157,54 @@ function addGround() {
 }
 
 
-function createWheel(radius, width) {
+function createWheelGroup(radius, width) {
     const group = new THREE.Group();
+    group.userData.spinAngle = 0;
 
-    const tireGeometry = new THREE.TorusGeometry(radius, width * 0.3, 8, 32);
-    const tireMaterial = new THREE.MeshStandardMaterial({
-        color: 0x2c1810,
-        roughness: 0.8,
-        metalness: 0.2
-    });
-    const tire = new THREE.Mesh(tireGeometry, tireMaterial);
+    const tireGeom = getSharedGeometry('tire', () =>
+        new THREE.TorusGeometry(radius, width * 0.3, 8, 32)
+    );
+    const tireMat = getSharedMaterial('tire', () =>
+        new THREE.MeshStandardMaterial({ color: 0x2c1810, roughness: 0.8, metalness: 0.2 })
+    );
+    const tire = new THREE.Mesh(tireGeom, tireMat);
     tire.rotation.y = Math.PI / 2;
     tire.castShadow = true;
     group.add(tire);
 
-    const rimGeometry = new THREE.CylinderGeometry(radius * 0.7, radius * 0.7, width * 0.6, 16);
-    const rimMaterial = new THREE.MeshStandardMaterial({
-        color: 0x8b4513,
-        roughness: 0.6,
-        metalness: 0.3
-    });
-    const rim = new THREE.Mesh(rimGeometry, rimMaterial);
+    const rimGeom = getSharedGeometry('rim', () =>
+        new THREE.CylinderGeometry(radius * 0.7, radius * 0.7, width * 0.6, 16)
+    );
+    const rimMat = getSharedMaterial('wood_rim', () =>
+        new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.6, metalness: 0.3 })
+    );
+    const rim = new THREE.Mesh(rimGeom, rimMat);
     rim.rotation.z = Math.PI / 2;
     rim.castShadow = true;
     group.add(rim);
 
-    for (let i = 0; i < 8; i++) {
-        const spokeGeometry = new THREE.BoxGeometry(radius * 0.65, 0.04, 0.04);
-        const spokeMaterial = new THREE.MeshStandardMaterial({
-            color: 0x654321,
-            roughness: 0.7
-        });
-        const spoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
-        spoke.rotation.y = (i * Math.PI) / 4;
-        spoke.castShadow = true;
-        group.add(spoke);
-    }
+    const spokeGeom = getSharedGeometry('spoke', () =>
+        new THREE.BoxGeometry(radius * 0.65, 0.04, 0.04)
+    );
+    const spokeMat = getSharedMaterial('wood_spoke', () =>
+        new THREE.MeshStandardMaterial({ color: 0x654321, roughness: 0.7 })
+    );
 
-    const hubGeometry = new THREE.CylinderGeometry(0.08, 0.08, width * 0.8, 12);
-    const hubMaterial = new THREE.MeshStandardMaterial({
-        color: 0xd4af37,
-        roughness: 0.4,
-        metalness: 0.8
+    const spokes = createInstancedMesh(spokeGeom, spokeMat, NUM_SPOKES, (i, obj) => {
+        obj.position.set(0, 0, 0);
+        obj.rotation.set(0, (i * Math.PI) / NUM_SPOKES, 0);
+        obj.scale.set(1, 1, 1);
     });
-    const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+    group.add(spokes);
+    group.userData.spokes = spokes;
+
+    const hubGeom = getSharedGeometry('hub', () =>
+        new THREE.CylinderGeometry(0.08, 0.08, width * 0.8, 12)
+    );
+    const hubMat = getSharedMaterial('brass', () =>
+        new THREE.MeshStandardMaterial({ color: 0xd4af37, roughness: 0.4, metalness: 0.8 })
+    );
+    const hub = new THREE.Mesh(hubGeom, hubMat);
     hub.rotation.z = Math.PI / 2;
     hub.castShadow = true;
     group.add(hub);
@@ -165,88 +221,105 @@ function createChariot() {
     const bodyWidth = CHARIOT_TRACK_WIDTH * 0.9;
     const bodyHeight = 0.3;
 
-    const bodyGeometry = new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyLength);
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: 0x8b4513,
-        roughness: 0.7,
-        metalness: 0.1
-    });
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    const bodyGeom = new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyLength);
+    const bodyMat = getSharedMaterial('wood_body', () =>
+        new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.7, metalness: 0.1 })
+    );
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
     body.position.y = WHEEL_RADIUS + bodyHeight / 2;
     body.castShadow = true;
     body.receiveShadow = true;
     chariotGroup.add(body);
 
-    const floorGeometry = new THREE.BoxGeometry(bodyWidth * 0.9, 0.05, bodyLength * 0.85);
-    const floorMaterial = new THREE.MeshStandardMaterial({
-        color: 0x654321,
-        roughness: 0.8
-    });
-    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    const floorGeom = new THREE.BoxGeometry(bodyWidth * 0.9, 0.05, bodyLength * 0.85);
+    const floorMat = getSharedMaterial('wood_floor', () =>
+        new THREE.MeshStandardMaterial({ color: 0x654321, roughness: 0.8 })
+    );
+    const floor = new THREE.Mesh(floorGeom, floorMat);
     floor.position.y = WHEEL_RADIUS + bodyHeight + 0.02;
     floor.castShadow = true;
     chariotGroup.add(floor);
 
-    const railingMaterial = new THREE.MeshStandardMaterial({
-        color: 0x654321,
-        roughness: 0.7
-    });
+    const railingMat = getSharedMaterial('wood_railing', () =>
+        new THREE.MeshStandardMaterial({ color: 0x654321, roughness: 0.7 })
+    );
 
-    for (let side of [-1, 1]) {
-        const postGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.6, 8);
-        for (let z of [-bodyLength * 0.3, 0, bodyLength * 0.3]) {
-            const post = new THREE.Mesh(postGeometry, railingMaterial);
-            post.position.set(side * bodyWidth * 0.4, WHEEL_RADIUS + bodyHeight + 0.3, z);
-            post.castShadow = true;
-            chariotGroup.add(post);
+    const postGeom = getSharedGeometry('railing_post', () =>
+        new THREE.CylinderGeometry(0.03, 0.03, 0.6, 8)
+    );
+
+    const postPositions = [];
+    for (const side of [-1, 1]) {
+        for (const z of [-bodyLength * 0.3, 0, bodyLength * 0.3]) {
+            postPositions.push({
+                x: side * bodyWidth * 0.4,
+                y: WHEEL_RADIUS + bodyHeight + 0.3,
+                z: z
+            });
         }
-
-        const railGeometry = new THREE.BoxGeometry(0.04, 0.04, bodyLength * 0.7);
-        const rail = new THREE.Mesh(railGeometry, railingMaterial);
-        rail.position.set(side * bodyWidth * 0.4, WHEEL_RADIUS + bodyHeight + 0.6, 0);
-        rail.castShadow = true;
-        chariotGroup.add(rail);
+    }
+    for (const side of [-1, 1]) {
+        postPositions.push({
+            x: side * bodyWidth * 0.3,
+            y: WHEEL_RADIUS + bodyHeight + 0.4,
+            z: -bodyLength * 0.4
+        });
     }
 
-    const backPostGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.8, 8);
-    for (let side of [-1, 1]) {
-        const post = new THREE.Mesh(backPostGeometry, railingMaterial);
-        post.position.set(side * bodyWidth * 0.3, WHEEL_RADIUS + bodyHeight + 0.4, -bodyLength * 0.4);
-        post.castShadow = true;
-        chariotGroup.add(post);
-    }
+    const railingPosts = createInstancedMesh(postGeom, railingMat, postPositions.length, (i, obj) => {
+        const p = postPositions[i];
+        obj.position.set(p.x, p.y, p.z);
+        obj.rotation.set(0, 0, 0);
+        obj.scale.set(1, 1, 1);
+    });
+    chariotGroup.add(railingPosts);
 
-    const backRailGeometry = new THREE.BoxGeometry(bodyWidth * 0.7, 0.04, 0.04);
-    const backRail = new THREE.Mesh(backRailGeometry, railingMaterial);
+    const sideRailGeom = getSharedGeometry('side_rail', () =>
+        new THREE.BoxGeometry(0.04, 0.04, bodyLength * 0.7)
+    );
+    const sideRailLeft = new THREE.Mesh(sideRailGeom, railingMat);
+    sideRailLeft.position.set(-bodyWidth * 0.4, WHEEL_RADIUS + bodyHeight + 0.6, 0);
+    sideRailLeft.castShadow = true;
+    chariotGroup.add(sideRailLeft);
+
+    const sideRailRight = new THREE.Mesh(sideRailGeom, railingMat);
+    sideRailRight.position.set(bodyWidth * 0.4, WHEEL_RADIUS + bodyHeight + 0.6, 0);
+    sideRailRight.castShadow = true;
+    chariotGroup.add(sideRailRight);
+
+    const backRailGeom = new THREE.BoxGeometry(bodyWidth * 0.7, 0.04, 0.04);
+    const backRail = new THREE.Mesh(backRailGeom, railingMat);
     backRail.position.set(0, WHEEL_RADIUS + bodyHeight + 0.8, -bodyLength * 0.4);
     backRail.castShadow = true;
     chariotGroup.add(backRail);
-
-    const wheelWidth = 0.15;
 
     leftKingpin = new THREE.Group();
     leftKingpin.position.set(-CHARIOT_TRACK_WIDTH / 2, 0, CHARIOT_WHEELBASE / 2 - 0.2);
     chariotGroup.add(leftKingpin);
 
-    frontLeftWheel = createWheel(WHEEL_RADIUS, wheelWidth);
+    frontLeftWheel = createWheelGroup(WHEEL_RADIUS, WHEEL_WIDTH);
     frontLeftWheel.position.set(0, WHEEL_RADIUS, 0);
     leftKingpin.add(frontLeftWheel);
+    wheelGroups.push(frontLeftWheel);
 
     rightKingpin = new THREE.Group();
     rightKingpin.position.set(CHARIOT_TRACK_WIDTH / 2, 0, CHARIOT_WHEELBASE / 2 - 0.2);
     chariotGroup.add(rightKingpin);
 
-    frontRightWheel = createWheel(WHEEL_RADIUS, wheelWidth);
+    frontRightWheel = createWheelGroup(WHEEL_RADIUS, WHEEL_WIDTH);
     frontRightWheel.position.set(0, WHEEL_RADIUS, 0);
     rightKingpin.add(frontRightWheel);
+    wheelGroups.push(frontRightWheel);
 
-    leftWheel = createWheel(WHEEL_RADIUS, wheelWidth);
+    leftWheel = createWheelGroup(WHEEL_RADIUS, WHEEL_WIDTH);
     leftWheel.position.set(-CHARIOT_TRACK_WIDTH / 2, WHEEL_RADIUS, -CHARIOT_WHEELBASE / 2 + 0.2);
     chariotGroup.add(leftWheel);
+    wheelGroups.push(leftWheel);
 
-    rightWheel = createWheel(WHEEL_RADIUS, wheelWidth);
+    rightWheel = createWheelGroup(WHEEL_RADIUS, WHEEL_WIDTH);
     rightWheel.position.set(CHARIOT_TRACK_WIDTH / 2, WHEEL_RADIUS, -CHARIOT_WHEELBASE / 2 + 0.2);
     chariotGroup.add(rightWheel);
+    wheelGroups.push(rightWheel);
 
     createSteeringLinkage();
 
@@ -254,23 +327,18 @@ function createChariot() {
     poleGroup.position.set(0, WHEEL_RADIUS + bodyHeight * 0.3, CHARIOT_WHEELBASE / 2 + 0.3);
     chariotGroup.add(poleGroup);
 
-    const poleGeometry = new THREE.BoxGeometry(0.08, 0.1, POLE_LENGTH);
-    const poleMaterial = new THREE.MeshStandardMaterial({
-        color: 0x654321,
-        roughness: 0.6
-    });
-    const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+    const poleGeom = new THREE.BoxGeometry(0.08, 0.1, POLE_LENGTH);
+    const poleMat = getSharedMaterial('wood_pole', () =>
+        new THREE.MeshStandardMaterial({ color: 0x654321, roughness: 0.6 })
+    );
+    const pole = new THREE.Mesh(poleGeom, poleMat);
     pole.position.set(0, 0, POLE_LENGTH / 2);
     pole.castShadow = true;
     poleGroup.add(pole);
 
-    const yokeGeometry = new THREE.BoxGeometry(0.6, 0.15, 0.2);
-    const yokeMaterial = new THREE.MeshStandardMaterial({
-        color: 0xd4af37,
-        roughness: 0.4,
-        metalness: 0.7
-    });
-    const yoke = new THREE.Mesh(yokeGeometry, yokeMaterial);
+    const yokeGeom = new THREE.BoxGeometry(0.6, 0.15, 0.2);
+    const yokeMat = getSharedMaterial('brass');
+    const yoke = new THREE.Mesh(yokeGeom, yokeMat);
     yoke.position.set(0, 0, POLE_LENGTH + 0.1);
     yoke.castShadow = true;
     poleGroup.add(yoke);
@@ -280,60 +348,58 @@ function createChariot() {
 
 
 function createSteeringLinkage() {
-    const linkageMaterial = new THREE.MeshStandardMaterial({
-        color: 0xd4af37,
-        roughness: 0.4,
-        metalness: 0.8
-    });
+    const linkageMat = getSharedMaterial('brass');
 
     const tieRodLength = CHARIOT_TRACK_WIDTH * 0.85;
-    const tieRodGeometry = new THREE.CylinderGeometry(0.025, 0.025, tieRodLength, 8);
-    const tieRodMaterial = linkageMaterial.clone();
+    const tieRodGeom = getSharedGeometry('tie_rod', () =>
+        new THREE.CylinderGeometry(0.025, 0.025, tieRodLength, 8)
+    );
 
-    leftTieRod = new THREE.Mesh(tieRodGeometry, tieRodMaterial);
+    leftTieRod = new THREE.Mesh(tieRodGeom, linkageMat);
     leftTieRod.rotation.z = Math.PI / 2;
     leftTieRod.position.set(-tieRodLength / 2, WHEEL_RADIUS * 0.5, CHARIOT_WHEELBASE / 2 - 0.3);
     chariotGroup.add(leftTieRod);
 
-    rightTieRod = new THREE.Mesh(tieRodGeometry, tieRodMaterial);
+    rightTieRod = new THREE.Mesh(tieRodGeom, linkageMat);
     rightTieRod.rotation.z = Math.PI / 2;
     rightTieRod.position.set(tieRodLength / 2, WHEEL_RADIUS * 0.5, CHARIOT_WHEELBASE / 2 - 0.3);
     chariotGroup.add(rightTieRod);
 
-    const armGeometry = new THREE.BoxGeometry(0.04, 0.04, 0.3);
-    const leftArm = new THREE.Mesh(armGeometry, linkageMaterial);
+    const armGeom = getSharedGeometry('steering_arm', () =>
+        new THREE.BoxGeometry(0.04, 0.04, 0.3)
+    );
+    const leftArm = new THREE.Mesh(armGeom, linkageMat);
     leftArm.position.set(0, 0, 0.15);
     leftKingpin.add(leftArm);
 
-    const rightArm = new THREE.Mesh(armGeometry, linkageMaterial);
+    const rightArm = new THREE.Mesh(armGeom, linkageMat);
     rightArm.position.set(0, 0, 0.15);
     rightKingpin.add(rightArm);
 }
 
 
 function createTrajectoryLine() {
-    const material = new THREE.LineBasicMaterial({
+    const centerMat = new THREE.LineBasicMaterial({
         color: 0x00d9ff,
         linewidth: 2,
         opacity: 0.8,
         transparent: true
     });
-
-    const geometry = new THREE.BufferGeometry();
-    wheelTrajectoryLine = new THREE.Line(geometry, material);
+    const centerGeom = new THREE.BufferGeometry();
+    wheelTrajectoryLine = new THREE.Line(centerGeom, centerMat);
     wheelTrajectoryLine.position.y = -WHEEL_RADIUS + 0.02;
     scene.add(wheelTrajectoryLine);
 
-    const material2 = new THREE.LineBasicMaterial({
+    const innerMat = new THREE.LineBasicMaterial({
         color: 0xe94560,
         linewidth: 2,
         opacity: 0.6,
         transparent: true
     });
-    const geometry2 = new THREE.BufferGeometry();
-    const innerLine = new THREE.Line(geometry2, material2);
-    innerLine.position.y = -WHEEL_RADIUS + 0.02;
-    scene.add(innerLine);
+    const innerGeom = new THREE.BufferGeometry();
+    innerTrajectoryLine = new THREE.Line(innerGeom, innerMat);
+    innerTrajectoryLine.position.y = -WHEEL_RADIUS + 0.02;
+    scene.add(innerTrajectoryLine);
 }
 
 
@@ -341,26 +407,24 @@ function updateSteering(poleAngleDeg) {
     if (!leftKingpin || !rightKingpin) return;
 
     const poleAngleRad = THREE.MathUtils.degToRad(poleAngleDeg);
-
     const L = CHARIOT_WHEELBASE;
     const T = CHARIOT_TRACK_WIDTH;
 
     if (Math.abs(poleAngleRad) < 0.001) {
         leftKingpin.rotation.y = 0;
         rightKingpin.rotation.y = 0;
-        return;
-    }
-
-    const R = L / Math.tan(Math.abs(poleAngleRad));
-    const innerAngle = Math.atan(L / (R - T / 2));
-    const outerAngle = Math.atan(L / (R + T / 2));
-
-    if (poleAngleDeg > 0) {
-        leftKingpin.rotation.y = outerAngle;
-        rightKingpin.rotation.y = innerAngle;
     } else {
-        leftKingpin.rotation.y = -innerAngle;
-        rightKingpin.rotation.y = -outerAngle;
+        const R = L / Math.tan(Math.abs(poleAngleRad));
+        const innerAngle = Math.atan(L / (R - T / 2));
+        const outerAngle = Math.atan(L / (R + T / 2));
+
+        if (poleAngleDeg > 0) {
+            leftKingpin.rotation.y = outerAngle;
+            rightKingpin.rotation.y = innerAngle;
+        } else {
+            leftKingpin.rotation.y = -innerAngle;
+            rightKingpin.rotation.y = -outerAngle;
+        }
     }
 
     if (poleGroup) {
@@ -373,7 +437,6 @@ function updateSteering(poleAngleDeg) {
 
 function updateLinkageVisual(poleAngleDeg) {
     const poleAngleRad = THREE.MathUtils.degToRad(poleAngleDeg);
-
     if (leftTieRod && rightTieRod) {
         const offset = Math.sin(poleAngleRad) * 0.3;
         leftTieRod.position.y = WHEEL_RADIUS * 0.5 + offset * 0.1;
@@ -384,74 +447,89 @@ function updateLinkageVisual(poleAngleDeg) {
 
 function updateWheelRotation(speed, dt) {
     const angularSpeed = speed / WHEEL_RADIUS;
+    for (const wg of wheelGroups) {
+        if (!wg || !wg.children || wg.children.length === 0) continue;
 
-    if (leftWheel) {
-        leftWheel.children[0].rotation.x += angularSpeed * dt;
-    }
-    if (rightWheel) {
-        rightWheel.children[0].rotation.x += angularSpeed * dt;
-    }
-    if (frontLeftWheel) {
-        frontLeftWheel.children[0].rotation.x += angularSpeed * dt;
-    }
-    if (frontRightWheel) {
-        frontRightWheel.children[0].rotation.x += angularSpeed * dt;
+        wg.userData.spinAngle = (wg.userData.spinAngle || 0) + angularSpeed * dt;
+        const tire = wg.children[0];
+        const rim = wg.children[1];
+        if (tire) tire.rotation.x = wg.userData.spinAngle;
+        if (rim) rim.rotation.z = Math.PI / 2 + wg.userData.spinAngle;
+
+        const spokes = wg.userData.spokes;
+        if (spokes) {
+            for (let i = 0; i < NUM_SPOKES; i++) {
+                dummyObj.position.set(0, 0, 0);
+                dummyObj.rotation.set(0, (i * Math.PI) / NUM_SPOKES + wg.userData.spinAngle, 0);
+                dummyObj.scale.copy(tmpScale);
+                dummyObj.updateMatrix();
+                spokes.setMatrixAt(i, dummyObj.matrix);
+            }
+            spokes.instanceMatrix.needsUpdate = true;
+        }
     }
 }
 
 
-function updateTrajectory(poleAngleDeg, speed, dt) {
+function updateTrajectories(poleAngleDeg, speed, dt) {
     if (!wheelTrajectoryLine) return;
 
-    const point = new THREE.Vector3(
+    const centerPt = new THREE.Vector3(
         chariotGroup.position.x,
         -WHEEL_RADIUS + 0.02,
         chariotGroup.position.z
     );
 
-    trajectoryPoints.push(point);
+    const R = Math.abs(THREE.MathUtils.degToRad(poleAngleDeg)) < 0.001
+        ? 999999
+        : CHARIOT_WHEELBASE / Math.tan(Math.abs(THREE.MathUtils.degToRad(poleAngleDeg)) * 0.85);
+    const direction = poleAngleDeg >= 0 ? 1 : -1;
 
-    if (trajectoryPoints.length > 500) {
-        trajectoryPoints.shift();
-    }
-
-    const positions = new Float32Array(trajectoryPoints.length * 3);
-    for (let i = 0; i < trajectoryPoints.length; i++) {
-        positions[i * 3] = trajectoryPoints[i].x;
-        positions[i * 3 + 1] = trajectoryPoints[i].y;
-        positions[i * 3 + 2] = trajectoryPoints[i].z;
-    }
-
-    wheelTrajectoryLine.geometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(positions, 3)
+    const innerPt = new THREE.Vector3(
+        chariotGroup.position.x - direction * CHARIOT_TRACK_WIDTH / 2 * 0.5,
+        -WHEEL_RADIUS + 0.02,
+        chariotGroup.position.z
     );
-    wheelTrajectoryLine.geometry.computeBoundingSphere();
+
+    trajectoryPoints.push(centerPt);
+    innerTrajectoryPoints.push(innerPt);
+
+    const MAX_POINTS = 400;
+    if (trajectoryPoints.length > MAX_POINTS) trajectoryPoints.shift();
+    if (innerTrajectoryPoints.length > MAX_POINTS) innerTrajectoryPoints.shift();
+
+    function updateLineGeom(line, points) {
+        const positions = new Float32Array(points.length * 3);
+        for (let i = 0; i < points.length; i++) {
+            positions[i * 3] = points[i].x;
+            positions[i * 3 + 1] = points[i].y;
+            positions[i * 3 + 2] = points[i].z;
+        }
+        line.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        line.geometry.computeBoundingSphere();
+    }
+
+    updateLineGeom(wheelTrajectoryLine, trajectoryPoints);
+    if (innerTrajectoryLine) updateLineGeom(innerTrajectoryLine, innerTrajectoryPoints);
 }
 
 
 function updateChariotPosition(poleAngleDeg, speed, dt) {
-    const poleAngleRad = THREE.MathUtils.degToRad(poleAngleDeg);
+    const poleAngleRad = THREE.MathUtils.degToRad(poleAngleDeg) * 0.85;
 
     if (Math.abs(poleAngleRad) < 0.001) {
         chariotGroup.position.z -= speed * dt;
     } else {
-        const R = CHARIOT_WHEELBASE / Math.tan(poleAngleRad * 0.85);
+        const R = CHARIOT_WHEELBASE / Math.tan(poleAngleRad);
         const angularVel = speed / R;
-
         const centerX = chariotGroup.position.x + R;
         const centerZ = chariotGroup.position.z;
-
         const angle = angularVel * dt;
         const cos = Math.cos(angle);
         const sin = Math.sin(angle);
 
-        const newX = centerX - R * cos;
-        const newZ = centerZ + R * sin;
-
-        chariotGroup.position.x = newX;
-        chariotGroup.position.z = newZ;
-
+        chariotGroup.position.x = centerX - R * cos;
+        chariotGroup.position.z = centerZ + R * sin;
         chariotGroup.rotation.y += angle;
     }
 }
@@ -464,21 +542,22 @@ function onWindowResize() {
 
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
-
     renderer.setSize(width, height);
 }
 
 
 let lastTime = 0;
 function animate(time) {
-    const dt = (time - lastTime) / 1000;
+    const dt = Math.min((time - lastTime) / 1000, 0.05);
     lastTime = time;
 
-    const speed = parseFloat(document.getElementById('speedSlider').value) || 5;
-    const poleAngle = parseFloat(document.getElementById('poleAngleSlider').value) || 0;
+    const speed = parseFloat(document.getElementById('speedSlider')?.value) || 5;
+    const poleAngle = parseFloat(document.getElementById('poleAngleSlider')?.value) || 0;
 
     updateSteering(poleAngle);
     updateWheelRotation(speed * 0.5, dt);
+    updateChariotPosition(poleAngle, speed * 0.3, dt);
+    updateTrajectories(poleAngle, speed, dt);
 
     controls.update();
     renderer.render(scene, camera);
@@ -604,8 +683,8 @@ function drawLinkageDiagram(poleAngleDeg) {
 
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 12px sans-serif';
-    ctx.fillText(`内轮转角: ${(Math.abs(poleAngleDeg > 0 ? innerAngle : -innerAngle) * 180 / Math.PI).toFixed(1)}°`, 20, 30);
-    ctx.fillText(`外轮转角: ${(Math.abs(poleAngleDeg > 0 ? outerAngle : -outerAngle) * 180 / Math.PI).toFixed(1)}°`, 20, 50);
+    ctx.fillText(`内轮转角: ${(Math.abs(innerAngle) * 180 / Math.PI).toFixed(1)}°`, 20, 30);
+    ctx.fillText(`外轮转角: ${(Math.abs(outerAngle) * 180 / Math.PI).toFixed(1)}°`, 20, 50);
 }
 
 
@@ -699,26 +778,25 @@ function updateSensorDisplay(data) {
 
 
 function updateSteeringDisplay(analysis) {
+    const r = analysis.turning_radius;
     document.getElementById('turningRadius').textContent =
-        analysis.turning_radius === Infinity || analysis.turning_radius > 999
-            ? '∞ m'
-            : `${analysis.turning_radius.toFixed(2)} m`;
-    document.getElementById('innerWheelAngle').textContent = `${analysis.inner_wheel_angle.toFixed(1)}°`;
-    document.getElementById('outerWheelAngle').textContent = `${analysis.outer_wheel_angle.toFixed(1)}°`;
-    document.getElementById('wheelSpeedDiff').textContent = `${(analysis.wheel_speed_diff * 100).toFixed(2)}%`;
-    document.getElementById('ackermannError').textContent = `${(analysis.ackermann_error * 100).toFixed(2)}%`;
+        (r === Infinity || r > 999 || r == null) ? '∞ m' : `${r.toFixed(2)} m`;
+    document.getElementById('innerWheelAngle').textContent = `${(analysis.inner_wheel_angle || 0).toFixed(1)}°`;
+    document.getElementById('outerWheelAngle').textContent = `${(analysis.outer_wheel_angle || 0).toFixed(1)}°`;
+    document.getElementById('wheelSpeedDiff').textContent = `${((analysis.wheel_speed_diff || 0) * 100).toFixed(2)}%`;
+    document.getElementById('ackermannError').textContent = `${((analysis.ackermann_error || 0) * 100).toFixed(2)}%`;
 }
 
 
 function updateStabilityDisplay(analysis) {
-    document.getElementById('yawRate').textContent = `${analysis.yaw_rate.toFixed(2)}°/s`;
-    document.getElementById('lateralAccel').textContent = `${analysis.lateral_acceleration.toFixed(2)} m/s²`;
-    document.getElementById('rollCenterHeight').textContent = `${analysis.roll_center_height.toFixed(3)} m`;
-    document.getElementById('stabilityIndex').textContent = analysis.stability_index.toFixed(2);
+    document.getElementById('yawRate').textContent = `${(analysis.yaw_rate || 0).toFixed(2)}°/s`;
+    document.getElementById('lateralAccel').textContent = `${(analysis.lateral_acceleration || 0).toFixed(2)} m/s²`;
+    document.getElementById('rollCenterHeight').textContent = `${(analysis.roll_center_height || 0).toFixed(3)} m`;
+    document.getElementById('stabilityIndex').textContent = (analysis.stability_index || 0).toFixed(2);
     document.getElementById('criticalSpeed').textContent =
         analysis.critical_speed ? `${analysis.critical_speed.toFixed(2)} m/s` : '— m/s';
 
-    drawRolloverGauge(analysis.rollover_risk);
+    drawRolloverGauge(analysis.rollover_risk || 0);
 
     if (chariotGroup) {
         const rollRad = (analysis.roll_angle || 0) * Math.PI / 180;
@@ -770,7 +848,8 @@ async function fetchSteeringAnalysis(poleAngle, speed) {
 
 
 function connectWebSocket() {
-    const wsUrl = `ws://${window.location.host}/ws/realtime`;
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProto}//${window.location.host}/ws/realtime`;
     socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
@@ -846,15 +925,11 @@ async function init() {
     drawRolloverGauge(0);
     setupEventListeners();
 
-    setTimeout(() => {
-        connectWebSocket();
-    }, 500);
+    setTimeout(() => connectWebSocket(), 500);
 
     try {
         const steering = await fetchSteeringAnalysis(0, 5);
-        if (steering) {
-            updateSteeringDisplay(steering);
-        }
+        if (steering) updateSteeringDisplay(steering);
     } catch (e) {
         console.log('使用默认数据');
     }
