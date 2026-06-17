@@ -1,0 +1,39 @@
+{
+    "redis": {
+        "host": "localhost",
+        "port": 6379,
+        "db": 0,
+        "password": null
+    },
+    "influxdb": {
+        "url": "http://localhost:8086",
+        "token": "my-token",
+        "org": "transport-history",
+        "bucket": "chariot-sensors"
+    },
+    "mqtt": {
+        "broker": "localhost",
+        "port": 1883,
+        "topic_alert": "chariot/alerts",
+        "topic_data": "chariot/data"
+    },
+    "fastapi": {
+        "host": "0.0.0.0",
+        "port": 8000
+    },
+    "redis_channels": {
+        "sensor_data_raw": "chariot:raw:sensor",
+        "sensor_data_validated": "chariot:validated:sensor",
+        "steering_result": "chariot:result:steering",
+        "stability_result": "chariot:result:stability",
+        "alerts": "chariot:alerts",
+        "api_request": {
+            "steering": "chariot:api:steering",
+            "stability": "chariot:api:stability"
+        },
+        "api_response": {
+            "steering": "chariot:api:steering:resp",
+            "stability": "chariot:api:stability:resp"
+        }
+    }
+}
