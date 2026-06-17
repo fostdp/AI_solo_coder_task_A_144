@@ -1,7 +1,27 @@
 import json
 import os
+import re
 from typing import Any, Dict
 from dataclasses import dataclass
+
+
+ENV_PATTERN = re.compile(r'\$\{([^}:]+)(?::-(.*?))?\}')
+
+
+def _replace_env_vars(value: Any) -> Any:
+    if isinstance(value, str):
+        def replace_match(match):
+            env_name = match.group(1)
+            default = match.group(2) if match.group(2) is not None else ''
+            env_value = os.environ.get(env_name, default)
+            return env_value
+        return ENV_PATTERN.sub(replace_match, value)
+    elif isinstance(value, dict):
+        return {k: _replace_env_vars(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [_replace_env_vars(item) for item in value]
+    else:
+        return value
 
 
 class ConfigLoader:
@@ -20,7 +40,17 @@ class ConfigLoader:
             return self._cache[name]
         path = os.path.join(self.config_dir, f'{name}.json')
         with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+            raw = f.read()
+        data = json.loads(raw)
+        data = _replace_env_vars(data)
+        if name == 'system_config':
+            if 'redis' in data:
+                if 'port' in data['redis']:
+                    data['redis']['port'] = int(data['redis']['port'])
+                if 'password' in data['redis'] and data['redis']['password'] == '':
+                    data['redis']['password'] = None
+            if 'mqtt' in data and 'port' in data['mqtt']:
+                data['mqtt']['port'] = int(data['mqtt']['port'])
         self._cache[name] = data
         return data
 

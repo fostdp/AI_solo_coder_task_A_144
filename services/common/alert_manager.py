@@ -254,6 +254,73 @@ class AlertManager:
 
         return stats
 
+    def check_stability(self, *args, **kwargs) -> List[Alert]:
+        if len(args) == 1 and isinstance(args[0], dict):
+            data = args[0]
+            vehicle_id = data.get("vehicle_id", "")
+            rollover_risk = data.get("rollover_risk", 0.0)
+            yaw_rate = data.get("yaw_rate", 0.0)
+            stability_index = data.get("stability_index", 1.0)
+        else:
+            vehicle_id = kwargs.get("vehicle_id", args[0] if len(args) > 0 else "")
+            rollover_risk = kwargs.get("rollover_risk", args[1] if len(args) > 1 else 0.0)
+            yaw_rate = kwargs.get("yaw_rate", args[2] if len(args) > 2 else 0.0)
+            stability_index = kwargs.get("stability_index", args[3] if len(args) > 3 else 1.0)
+
+        triggered_alerts = []
+
+        if rollover_risk > 70:
+            if not self._is_in_cooldown(vehicle_id, "rollover_risk"):
+                severity = "critical" if rollover_risk > 85 else "warning"
+                alert = Alert(
+                    vehicle_id=vehicle_id,
+                    alert_type="rollover_risk",
+                    severity=severity,
+                    value=rollover_risk,
+                    threshold=70.0,
+                    message=f"侧翻风险 {rollover_risk:.1f}% 超过阈值 70%，立即采取措施",
+                    timestamp=time.time()
+                )
+                triggered_alerts.append(alert)
+                self._update_cooldown(vehicle_id, "rollover_risk")
+
+        if stability_index < 0.3:
+            if not self._is_in_cooldown(vehicle_id, "low_stability"):
+                severity = "critical" if stability_index < 0.15 else "warning"
+                alert = Alert(
+                    vehicle_id=vehicle_id,
+                    alert_type="low_stability",
+                    severity=severity,
+                    value=stability_index,
+                    threshold=0.3,
+                    message=f"稳定性指数 {stability_index:.2f} 低于阈值 0.3，行驶不稳定",
+                    timestamp=time.time()
+                )
+                triggered_alerts.append(alert)
+                self._update_cooldown(vehicle_id, "low_stability")
+
+        if abs(yaw_rate) > 50:
+            if not self._is_in_cooldown(vehicle_id, "high_yaw_rate"):
+                severity = "warning"
+                alert = Alert(
+                    vehicle_id=vehicle_id,
+                    alert_type="high_yaw_rate",
+                    severity=severity,
+                    value=yaw_rate,
+                    threshold=50.0,
+                    message=f"横摆角速度 {yaw_rate:.1f}°/s 过高，存在甩尾风险",
+                    timestamp=time.time()
+                )
+                triggered_alerts.append(alert)
+                self._update_cooldown(vehicle_id, "high_yaw_rate")
+
+        if triggered_alerts:
+            with self._lock:
+                self.alerts.extend(triggered_alerts)
+                self._publish_alerts(triggered_alerts)
+
+        return triggered_alerts
+
     def close(self):
         if self.mqtt_client:
             self.mqtt_client.loop_stop()

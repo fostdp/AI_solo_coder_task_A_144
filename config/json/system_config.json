@@ -1,21 +1,21 @@
 {
     "redis": {
-        "host": "localhost",
-        "port": 6379,
+        "host": "${REDIS_HOST:-localhost}",
+        "port": "${REDIS_PORT:-6379}",
         "db": 0,
-        "password": null
+        "password": "${REDIS_PASSWORD:-}"
     },
     "influxdb": {
-        "url": "http://localhost:8086",
-        "token": "my-token",
-        "org": "transport-history",
-        "bucket": "chariot-sensors"
+        "url": "http://${INFLUXDB_HOST:-localhost}:${INFLUXDB_PORT:-8086}",
+        "token": "${INFLUXDB_TOKEN:-my-token}",
+        "org": "${INFLUXDB_ORG:-transport-history}",
+        "bucket": "${INFLUXDB_BUCKET:-chariot-sensors}"
     },
     "mqtt": {
-        "broker": "localhost",
-        "port": 1883,
-        "topic_alert": "chariot/alerts",
-        "topic_data": "chariot/data"
+        "broker": "${MQTT_HOST:-localhost}",
+        "port": "${MQTT_PORT:-1883}",
+        "topic_alert": "${MQTT_TOPIC_ALERT:-chariot/alerts}",
+        "topic_data": "${MQTT_TOPIC_DATA:-chariot/data}"
     },
     "fastapi": {
         "host": "0.0.0.0",
